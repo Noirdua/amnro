@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<IntelliSense xmlns="http://schemas.excel-dna.net/intellisense/1.0">
+  <FunctionInfo>
+    <Function Name="AddSteps" Description="Spills that many totals, counting the start as the first.">
+      <Argument Name="Start" Description="Starting number. Counted as the first total." />
+      <Argument Name="Add" Description="Amount added each time." />
+      <Argument Name="Times" Description="How many totals, including the start." />
+      <Argument Name="Gap" Description="Optional. TRUE leaves a blank cell between totals." />
+      <Argument Name="Pad" Description="Optional. TRUE returns padded text such as 01. Omit it for numbers." />
+      <Argument Name="Down" Description="Optional. TRUE spills down. Omit it for a row." />
+      <Argument Name="Split" Description="Optional. TRUE puts each digit, and a decimal point, in its own cell." />
+    </Function>
+    <Function Name="TimesSteps" Description="Spills the number times 1 through the count.">
+      <Argument Name="Number" Description="Number to multiply." />
+      <Argument Name="Times" Description="How many products, from 1 through this count." />
+      <Argument Name="Gap" Description="Optional. TRUE leaves a blank cell between products." />
+      <Argument Name="Pad" Description="Optional. TRUE returns padded text such as 08. Omit it for numbers." />
+      <Argument Name="Down" Description="Optional. TRUE spills down. Omit it for a row." />
+      <Argument Name="Split" Description="Optional. TRUE puts each digit, and a decimal point, in its own cell." />
+    </Function>
+  </FunctionInfo>
+</IntelliSense>

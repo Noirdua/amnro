@@ -1,0 +1,17 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "xlide": {
+      "type": "local",
+      "command": [
+        "C:\\Users\\Admin\\.local\\bin\\uvx.exe",
+        "--from",
+        "xlide-mcp[live]",
+        "xlide-mcp",
+        "--root",
+        "C:\\Forgejo\\amnro excel"
+      ],
+      "enabled": true
+    }
+  }
+}

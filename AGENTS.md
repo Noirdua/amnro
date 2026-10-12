@@ -1,0 +1,183 @@
+# XLIDE Agent Instructions
+
+This workspace uses XLIDE, a VS Code extension for the VBA in macro-enabled Office files and for Visual Basic 6 projects. XLIDE reads and writes the VBA project inside a file directly. Office is needed only to run macros and tests.
+
+Files it handles: Excel (.xlsm, .xlsb, .xlam, .xltm, .xls, .xlt, .xla), Word (.docm, .dotm, .doc, .dot), PowerPoint (.pptm, .potm, .ppsm, .ppam, .ppt, .ppa), Access (.accdb, .accda, .mdb, .mda), and VB6 projects (.vbp).
+
+## Rules for every agent
+
+- The VBA lives inside the Office file, and the file is the only source of truth for it. Exported .bas, .cls and .frm files are copies and can be stale.
+- Change an Office file only through XLIDE or the xlide-mcp server described below. Do not unzip, rezip, hex-edit or hand-script it, and do not touch vbaProject.bin. Such an edit can corrupt the file or silently drop its code.
+- Do not drive Office with COM, PowerShell or VBScript automation of your own, and never open, close or kill an Office application the user is running. On Windows, the MCP server runs VBA in an instance it owns.
+- Install or add nothing without asking. If a task needs the MCP server or any other package, tell the user which one, what it is for, and exactly what to run or add, then wait for their answer.
+- Read the code you are about to change, and change only what the task needs.
+- Keep VBA source and cell values ASCII unless the user asks otherwise.
+- Ask the user before anything hard to undo: deleting a module or a shape, overwriting cells that hold data, or writing to a project that is digitally signed (the write removes the signature) or password-protected.
+- Verify every change as described below, and report only what you observed.
+
+## Which way to work
+
+- If you can call tools named xlide_*, work through them. GitHub Copilot Chat can in Agent mode, with any model it offers, and so can other agents that VS Code gives its language model tools. See "With XLIDE's tools".
+- If you cannot, reach a module through the xlide-mcp server, as a VS Code document, or through an export. See "Without XLIDE's tools".
+- A UserForm's controls and layout are edited as XML either way. See "UserForms".
+- A VB6 project keeps each module in its own text file. See "VB6 projects".
+
+## With XLIDE's tools
+
+Workflow:
+
+1. Find the file with xlide_listProjects when the user has not named one. Pass absolute paths to every tool.
+2. Call xlide_getProjectInfo once per file. It lists the modules and, for Excel, the sheets and named ranges, and says whether the project is signed or password-protected.
+3. Read with xlide_readModule. Its first line is a contentToken: pass it back as expectedContentToken when you write, so the write is refused if the module changed after your read. For a large module, pass ranges (line ranges) or procedures (names) to read only the parts you need, several in one call.
+4. Write with xlide_writeModule. It replaces the module's code, so send all of it; header lines you include are replaced by the module's own. It creates a missing module: a standard module, or a class module with kind "class".
+5. To change part of a module, use xlide_editModule: it replaces line ranges or whole procedures and inserts after a line, several edits in one call, each numbered as your read showed the module. It needs the contentToken of that read. Prefer it for a large module; xlide_writeModule is for a new module or a rewrite.
+6. After every VBA change, call xlide_analyzeProject. Treat any problem as a build failure: fix it and analyze again until problems is empty.
+7. If the file has @xlide-test tests and the change touches tested code, run xlide_runVbaTests. It needs Windows, the file's Office application, and the XlideAssert module, which the user installs from Unit Tests in the XLIDE sidebar.
+8. Before a commit, call xlide_gitChanges to see what changed inside the file since HEAD, one diff per module. git diff cannot show this: the file is binary.
+
+Tools that only read:
+
+- xlide_listProjects: the macro-enabled files and VB6 projects in the workspace.
+- xlide_getProjectInfo: modules, sheets and named ranges in one call.
+- xlide_validateProject: structural problems in the project, before risky work.
+- xlide_listModules: module names and kinds.
+- xlide_listSubs: the procedures in one module.
+- xlide_readModule: a module's code.
+- xlide_searchModules: where a name is declared or used, across every module.
+- xlide_analyzeProject: XLIDE's analyzer over the whole project.
+- xlide_gitChanges: each module's diff against a git revision.
+- xlide_listSheets: sheet names and used ranges.
+- xlide_readCells: cell values, as Excel last calculated them.
+- xlide_readFormulas: cell formulas.
+- xlide_listShapes: shapes, buttons and form controls, with the Sub each one runs and how each looks.
+- xlide_listReferences: the type libraries the project references.
+
+Tools that change something (the user confirms each call):
+
+- xlide_writeModule: create a module or replace its code.
+- xlide_editModule: change parts of a module: line ranges, procedures, insertions.
+- xlide_renameModule: rename a module.
+- xlide_deleteModule: delete a module.
+- xlide_createProject: create a new macro-enabled file. It never overwrites one.
+- xlide_writeCells: write values and formulas into cells.
+- xlide_editShape: add, move, relabel, restyle, restack or delete a shape or button, or link it to a Sub.
+- xlide_addReference: reference another Office application's object library, so the project can name its types early bound.
+- xlide_removeReference: take a reference away again. Code that names it early bound stops compiling.
+- xlide_runVbaTests: run the tests in the file's Office application. Results go to tests/ beside the file by default.
+- xlide_exportModules: export modules to a folder. Only when the user asks.
+- xlide_importModules: apply a folder's .bas, .cls and .frm files to the file, as Import Modules from Folder does. Only when the user asks.
+- xlide_configureExportMode: set how exports treat stale files. Only when the user asks.
+
+Rules for the tools:
+
+- Change VBA only through xlide_writeModule or xlide_editModule, even in a module the user has open. XLIDE shows the user a before/after diff of each write and marks the module for Review, Keep or Revert, with Keep All and Revert All above the tree. An edit made in an open xlide-vba: editor skips that review. If the user reverts, read the module again before your next edit.
+- Do not work from exported .bas or .cls files unless the user asks about them.
+- Module names must be valid VBA identifiers. Sheet and workbook modules (Sheet1, ThisWorkbook, ThisDocument) can be written but not renamed or deleted. A UserForm's module holds only its code; see "UserForms" for its controls.
+- If a write fails because the file is open in its Office application, tell the user. Depending on the user's settings, XLIDE closes and reopens the file itself; never do that yourself.
+- Access runs its compiled project, so a write takes effect when Access next opens the database.
+- A project that references another Office application can name its types: a Word document that references Excel compiles Dim xl As Excel.Application, and XLIDE checks that code against both object models. xlide_listReferences says which applications a project drives, and xlide_addReference adds one the code names but the project lacks - which is what the missing-library-reference finding means. Code that names a referenced application is normal VBA, not a mistake.
+- xlide_readCells returns results as Excel last calculated them. A formula you write, and any formula that depends on a cell you write, keeps its old result until the workbook is next opened in Excel. Do not report a result Excel has not calculated.
+- Write formulas as you would type them into Excel 365, such as =XLOOKUP(...) or =FILTER(...), with no _xlfn. prefixes. If Excel would reject any formula, nothing is written and the error names the cell; fix it and write again.
+- A shape's macro must be a Public Sub with no required parameters that is already in the project, so write the Sub first. Name it as Proc, or Module.Proc when two modules have one. ActiveX controls are listed but not edited: their code is event procedures in the sheet's module.
+
+GitHub Copilot:
+
+- XLIDE's tools run in Agent mode. If they are missing, ask the user to switch to Agent mode and enable XLIDE in the chat's tool picker.
+- The user can point you at a tool with #, such as #xlideReadModule.
+- A declined confirmation is the user's answer. Do not repeat the call unchanged.
+- Your own file tools cannot change the VBA inside an Office file. Use XLIDE's tools for it.
+
+## Without XLIDE's tools
+
+A module inside an Office file has no path on disk. XLIDE serves each one to VS Code as a document at an xlide-vba: address, such as xlide-vba:/C:/Work/Budget.xlsm/Module1.bas, and the matching disk path, C:/Work/Budget.xlsm/Module1.bas, does not exist: a tool that opens, reads or writes files by path gets "no such file or directory". A list of open editors does show such a tab, so seeing a module open is not the same as being able to read it.
+
+Three ways in, best first:
+
+- The MCP server, once the user agrees to it. For an agent that is not GitHub Copilot, the author of XLIDE recommends xlide-mcp, an MCP server of his that gives your client its own tools for the code inside a file, with no export step and nothing to install. See "The XLIDE MCP server".
+- If your edits go through VS Code's editor APIs rather than the file system, edit that document and save it. Saving writes the module into the Office file. XLIDE cannot tell such an edit from the user's typing, so it shows no before/after review: tell the user which modules you changed. If a save stops at VS Code's prompt that the file is newer, the module changed outside the editor, for example in the VBE; tell the user rather than overwriting it.
+- Otherwise, work on exported module files, and let the user carry them in and out:
+  1. Ask the user to export: in the XLIDE view of the Explorer, right-click the file and choose Export All Modules to Folder (or run "XLIDE: Export All Modules to Folder"), then apply the preview. Ask which folder they chose. A folder saved in the preview is also recorded as exportFolder in the settings file beside the Office file: Budget.xlsm.xlide_settings.json for Budget.xlsm.
+  2. Edit the exported files. The file name is the module name. A .bas file is a standard module; a .cls file is a class, a sheet or workbook module, or a form's code. Keep the header lines at the top of each exported file as they are. A new file can be code only: a new .bas becomes a standard module and a new .cls a class module.
+  3. Do not create files for sheets, the workbook or forms: import cannot create those modules.
+  4. Ask the user to import: right-click the file and choose Import Modules from Folder (or run "XLIDE: Import Modules from Folder"). XLIDE shows the change to every module before it writes anything, and the user applies it.
+
+Either way:
+
+- Never report a module as changed because you wrote an exported .bas or .cls. Those files are copies, and nothing reads them back into the Office file until the user imports them.
+- To add, rename or delete a module, use the MCP server, or ask the user to right-click in the XLIDE view and choose Add Standard Module, Add Class Module, Rename Module or Delete Module. An import can also create a standard or class module from a new file.
+- Check your work. With the MCP server, analyze the file yourself. Otherwise ask the user to run Analyze Project and give you the report: Copy JSON puts it on the clipboard, and Export JSON saves it to a file you can read, by default Budget.xlsm.xlide-analysis.json beside Budget.xlsm. XLIDE also reports an open module's findings in VS Code's Problems panel, if you can read them there. Treat any problem as a build failure.
+- If the file has tests, run them with the MCP server, or ask the user to run them from Unit Tests in the XLIDE sidebar. XLIDE writes the results to tests/status_for_ci.json beside the file by default, with each run's details in its own folder under tests/.
+- Without the MCP server you cannot read or change the document surface: sheets, cells, formulas or shapes. Describe the change for the user, or suggest the MCP server, which reaches all of it.
+
+The rules above about module names, sheet and workbook modules, and ASCII apply to both ways.
+
+## The XLIDE MCP server
+
+xlide-mcp is an MCP server by the author of XLIDE, and the route he recommends for an agent that cannot call XLIDE's tools. It gives your client its own tools for the VBA, UserForms, Power Query, sheets and shapes inside a file, working on the file itself with no export step. Add nothing before the user agrees: say what it is for and what you are asking them to add, then wait.
+
+It reaches the document surface the code lives on, not just the code: the sheets, the cell values and the formulas, and the shapes with the macros they run. When the change belongs to the document rather than the VBA, this is the way to make it.
+
+Nothing has to be installed. uv fetches the server on its first run, and since uv is one binary that brings its own Python, a machine with neither can still run it. The user adds this to their MCP client, such as Claude Desktop or Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "xlide": {
+      "command": "uvx",
+      "args": [
+        "--from", "xlide-mcp[live]",
+        "xlide-mcp", "--root", "/path/to/your/files"
+      ]
+    }
+  }
+}
+```
+
+The live extra is safe to ask for on every platform: what it pulls in is marked for Windows, so elsewhere it resolves to nothing and the same configuration works. Drop the --from pair for the file layer alone. uvx takes the newest published version unless it is pinned, as xlide-mcp@0.1.0.
+
+In VS Code, the same block goes in .mcp.json at the top of the workspace folder. VS Code reads that file natively, so GitHub Copilot in Agent mode gets the server's tools beside XLIDE's own, and Claude Code reads it for the project too, asking once before it starts the server. VS Code's own .vscode/mcp.json takes the same servers under a "servers" key, and the MCP: Add Server command writes it. Ask before adding either file.
+
+If the user would rather install it, `pip install xlide-mcp` (or "xlide-mcp[live]") gives the same server as the command xlide-mcp, taking the same arguments.
+
+--root is the security boundary, and it can be repeated. Every path a tool accepts is resolved, symlinks included, and refused unless it lands inside a root, so ask the user to add the folder rather than working around a refusal. --read-only allows reads and analysis and refuses every write.
+
+Call xlide_doctor first in a new session. It reports the workspace roots, which layers are installed, which Office applications the machine has, and whether each one has the Trust Center setting that running VBA needs.
+
+What it offers, by group:
+
+- Projects: xlide_list_projects, xlide_project_info, xlide_validate_project, xlide_create_project, xlide_doctor.
+- References and catalog: xlide_list_references, xlide_access_catalog.
+- Modules: xlide_list_modules, xlide_read_module, xlide_write_module, xlide_rename_module, xlide_delete_module, xlide_list_procedures, xlide_search_modules.
+- Analysis: xlide_analyze, xlide_analyze_source, xlide_rules.
+- Forms and Power Query: xlide_list_forms, xlide_read_form, xlide_manage_form, xlide_edit_form, xlide_list_queries, xlide_read_query, xlide_write_query.
+- The document surface: xlide_list_sheets, xlide_read_cells, xlide_write_cells, xlide_list_shapes, xlide_set_shape_macro. A write takes values and formulas, spelled as Excel 365 takes them, and rewrites only the rows it touches.
+- Running VBA, on Windows with the application installed: xlide_run_macro, xlide_run_vba, xlide_run_tests, xlide_compile_check.
+- Source control: xlide_export_modules, xlide_import_modules, xlide_git_changes.
+- A running Visual Basic Editor session, when there is one: xlide_live_sessions, xlide_live_state, xlide_live_request, xlide_live_read_module.
+
+Reading and writing files works on Windows, macOS and Linux with no Office installed. Running macros and tests needs Windows and the file's desktop application.
+
+How to work with it:
+
+- A read returns a content token. Pass it back on the write, so a write is refused if the module changed after your read.
+- Analyze after every change, and treat an error as a build failure.
+- Macros run in an instance the server owns. It never attaches to an application the user is running.
+- A cell value is what Excel last calculated, so do not report a result of a formula you just wrote.
+- Anything destructive is the user's decision, not yours: deleting a module, overwriting cells that hold data, or writing to a signed or password-protected project.
+- Do not write while the file is open in its Office application. XLIDE notices your write and reloads any module the user has open.
+- In VS Code, XLIDE shows each of your module writes in its tree with a before/after diff and Keep / Revert, as it does for its own tools, while the user has "Mirror MCP server edits" turned on. That toggle is in the XLIDE sidebar's Agent Instructions dialog and in XLIDE's settings, from XLIDE 10.7.2.
+- A write's result carries an xlide_vscode field. If notified is false, no XLIDE window took the report: when the user works in VS Code with XLIDE, tell them your edits will not show in the XLIDE tree until they turn that toggle on. If shown is false, no window has the file in its tree or open. If review is "pending", the module waits in the XLIDE tree: tell the user to look there and choose Keep or Revert, and read the module again before your next edit if they revert.
+
+## UserForms
+
+A UserForm's code is its module. Its controls and layout are in its form markup, an XML document at an xlide-vba: address ending in .form, which the user opens with Open Form Markup on the form in the XLIDE view. Edit the markup and save it to change the form. If any of it does not parse, nothing is applied. Like a module, it is a document in VS Code and not a file on disk, and no XLIDE tool reads or writes it.
+
+## VB6 projects
+
+- A .vbp project's modules are the .bas, .cls, .frm, .ctl and .pag files it lists, and XLIDE edits those files in place. With XLIDE's tools, read and write them through the tools; without, edit the files directly.
+- Keep each file's header: the VERSION line, a form's Begin ... End block, and the Attribute lines. Never edit a .frx file; it is binary.
+- To rename, add or remove a module, change its file and its line in the .vbp together, writing the line the way the existing ones are written.
+
+## When you finish
+
+Report what changed (modules, cells, shapes), how you verified it and with what result, and what the user still has to do: review a diff, import the files, or open the workbook in Excel so its formulas recalculate.
